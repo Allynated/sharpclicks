@@ -4,7 +4,6 @@
 // =============================================================================
 // ^^This was a lifesaver, thank you so much lol
 
-
 use eframe::egui::{self};
 use enigo::{Button as EnigoButton, Direction, Enigo, Mouse, Settings};
 use rdev::{EventType, Key};
@@ -89,8 +88,6 @@ fn start_key_binding_listener(tx: std::sync::mpsc::Sender<String>) {
     thread::spawn(move || {
         let captured = Arc::new(AtomicBool::new(false));
         let captured_clone = Arc::clone(&captured);
-
-        thread::sleep(Duration::from_millis(150));
 
         if let Err(err) = rdev::listen(move |event: rdev::Event| {
             if !captured_clone.load(Ordering::SeqCst) {
@@ -202,8 +199,12 @@ fn button_to_string(button: rdev::Button) -> Option<String> {
         rdev::Button::Left => Some("LEFT_MOUSE".to_string()),
         rdev::Button::Right => Some("RIGHT_MOUSE".to_string()),
         rdev::Button::Middle => Some("MIDDLE_MOUSE".to_string()),
-        rdev::Button::Unknown(8) => Some("Side1".to_string()),
-        rdev::Button::Unknown(9) => Some("Side2".to_string()),
+        rdev::Button::Unknown(4) => Some("Unknown4".to_string()),
+        rdev::Button::Unknown(5) => Some("Unknown5".to_string()),
+        rdev::Button::Unknown(6) => Some("Unknown6".to_string()),
+        rdev::Button::Unknown(7) => Some("Unknown7".to_string()),
+        rdev::Button::Unknown(8) => Some("Unknown8".to_string()),
+        rdev::Button::Unknown(9) => Some("Unknown9".to_string()),
         _ => None,
     }
 }
@@ -456,7 +457,10 @@ fn generated_ui(ctx: &egui::Context, state: &mut GeneratedState) {
                                 output: state.output.clone(),
                                 click_mode: state.click_mode,
                             };
-
+                            state.binding_input = false;
+                            state.binding_input_rx = None;
+                            state.binding_output = false;
+                            state.binding_output_rx = None;
                             if let Some(active) = start_click_thread(config) {
                                 state.is_running = true;
                                 state.click_active = Some(active);
@@ -535,7 +539,6 @@ fn generated_ui(ctx: &egui::Context, state: &mut GeneratedState) {
         });
     });
 }
-
 
 pub struct SharpClicks {
     state: GeneratedState,
@@ -679,16 +682,12 @@ fn click_timing_from_cps_cdc(cps: f32, cdc: f32, overhead_us: u64) -> ClickTimin
     let hold_us = hold_us.saturating_sub(overhead_us).max(500);
     let release_us = release_us.saturating_sub(overhead_us).max(500);
 
-    let speed_compensation_modifier = if cps > 50.0 {
-        1.015 
-    } else {
-        1.000
-    };
+    let speed_compensation_modifier = if cps > 50.0 { 1.015 } else { 1.000 };
 
     let hold_us = (hold_us as f64 / speed_compensation_modifier).round() as u64;
     let release_us = (release_us as f64 / speed_compensation_modifier).round() as u64;
 
-    let hold_us = hold_us.saturating_sub(overhead_us).max(250); 
+    let hold_us = hold_us.saturating_sub(overhead_us).max(250);
     let release_us = release_us.saturating_sub(overhead_us).max(250);
 
     ClickTiming {
@@ -811,8 +810,8 @@ fn parse_button(value: &str) -> Option<EnigoButton> {
         "LEFT_MOUSE" | "LEFT" | "BUTTON1" => Some(EnigoButton::Left),
         "RIGHT_MOUSE" | "RIGHT" | "BUTTON2" => Some(EnigoButton::Right),
         "MIDDLE_MOUSE" | "MIDDLE" | "BUTTON3" => Some(EnigoButton::Middle),
-        "SIDE1" | "BACK" | "BACK_BUTTON" | "BUTTON4" => Some(EnigoButton::Back),
-        "SIDE2" | "FORWARD" | "FORWARD_BUTTON" | "BUTTON5" => Some(EnigoButton::Forward),
+        "UNKNOWN5" | "UNKNOWN7" | "UNKNOWN9" | "BACK" | "BACK_BUTTON" | "BUTTON4" => Some(EnigoButton::Back),
+        "UNKNOWN4" | "UNKNOWN6" | "UNKNOWN8" | "FORWARD" | "FORWARD_BUTTON" | "BUTTON5" => Some(EnigoButton::Forward),
         "SCROLL_UP" | "SCROLLUP" | "WHEEL_UP" => Some(EnigoButton::ScrollUp),
         "SCROLL_DOWN" | "SCROLLDOWN" | "WHEEL_DOWN" => Some(EnigoButton::ScrollDown),
         "SCROLL_LEFT" | "SCROLLLEFT" | "WHEEL_LEFT" => Some(EnigoButton::ScrollLeft),
@@ -825,7 +824,7 @@ fn start_click_thread(config: ClickConfig) -> Option<Arc<AtomicBool>> {
     let trigger = parse_key(&config.input);
 
     let input_lower = config.input.to_lowercase();
-    if trigger.is_none() && input_lower != "side1" && input_lower != "side2" {
+    if trigger.is_none() && input_lower != "unknown4" && input_lower != "unknown5" && input_lower != "unknown6" && input_lower != "unknown7" && input_lower != "unknown8" && input_lower != "unknown9" && input_lower != "left_mouse" && input_lower != "right_mouse" && input_lower != "middle_mouse" {
         eprintln!(
             "Warning: Unsupported keyboard input key '{}'; defaulting listener fallback to F6",
             config.input
@@ -912,8 +911,12 @@ fn start_click_thread(config: ClickConfig) -> Option<Arc<AtomicBool>> {
                     let _ = std::io::stdout().flush();
 
                     match button {
-                        rdev::Button::Unknown(8) => config.input.to_lowercase() == "side1",
-                        rdev::Button::Unknown(9) => config.input.to_lowercase() == "side2",
+                        rdev::Button::Unknown(4) => config.input.to_lowercase() == "unknown4",
+                        rdev::Button::Unknown(5) => config.input.to_lowercase() == "unknown5",
+                        rdev::Button::Unknown(6) => config.input.to_lowercase() == "unknown6",
+                        rdev::Button::Unknown(7) => config.input.to_lowercase() == "unknown7",
+                        rdev::Button::Unknown(8) => config.input.to_lowercase() == "unknown8",
+                        rdev::Button::Unknown(9) => config.input.to_lowercase() == "unknown9",
                         rdev::Button::Left => config.input.to_ascii_uppercase() == "LEFT_MOUSE",
                         rdev::Button::Right => config.input.to_ascii_uppercase() == "RIGHT_MOUSE",
                         rdev::Button::Middle => config.input.to_ascii_uppercase() == "MIDDLE_MOUSE",
@@ -926,8 +929,12 @@ fn start_click_thread(config: ClickConfig) -> Option<Arc<AtomicBool>> {
             let is_trigger_released = match &event.event_type {
                 EventType::KeyRelease(key) => parse_key(&config.input).map_or(false, |k| k == *key),
                 EventType::ButtonRelease(button) => match button {
-                    rdev::Button::Unknown(8) => config.input.to_lowercase() == "side1",
-                    rdev::Button::Unknown(9) => config.input.to_lowercase() == "side2",
+                    rdev::Button::Unknown(4) => config.input.to_lowercase() == "unknown4",
+                    rdev::Button::Unknown(5) => config.input.to_lowercase() == "unknown5",
+                    rdev::Button::Unknown(6) => config.input.to_lowercase() == "unknown6",
+                    rdev::Button::Unknown(7) => config.input.to_lowercase() == "unknown7",
+                    rdev::Button::Unknown(8) => config.input.to_lowercase() == "unknown8",
+                    rdev::Button::Unknown(9) => config.input.to_lowercase() == "unknown9",
                     rdev::Button::Left => config.input.to_ascii_uppercase() == "LEFT_MOUSE",
                     rdev::Button::Right => config.input.to_ascii_uppercase() == "RIGHT_MOUSE",
                     rdev::Button::Middle => config.input.to_ascii_uppercase() == "MIDDLE_MOUSE",
@@ -955,5 +962,3 @@ fn start_click_thread(config: ClickConfig) -> Option<Arc<AtomicBool>> {
 
     Some(global_running)
 }
-
-
