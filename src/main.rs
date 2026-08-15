@@ -955,3 +955,5 @@ fn start_click_thread(config: ClickConfig) -> Option<Arc<AtomicBool>> {
 
     Some(global_running)
 }
+
+
