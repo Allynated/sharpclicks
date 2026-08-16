@@ -810,8 +810,12 @@ fn parse_button(value: &str) -> Option<EnigoButton> {
         "LEFT_MOUSE" | "LEFT" | "BUTTON1" => Some(EnigoButton::Left),
         "RIGHT_MOUSE" | "RIGHT" | "BUTTON2" => Some(EnigoButton::Right),
         "MIDDLE_MOUSE" | "MIDDLE" | "BUTTON3" => Some(EnigoButton::Middle),
-        "UNKNOWN5" | "UNKNOWN7" | "UNKNOWN9" | "BACK" | "BACK_BUTTON" | "BUTTON4" => Some(EnigoButton::Back),
-        "UNKNOWN4" | "UNKNOWN6" | "UNKNOWN8" | "FORWARD" | "FORWARD_BUTTON" | "BUTTON5" => Some(EnigoButton::Forward),
+        "UNKNOWN5" | "UNKNOWN7" | "UNKNOWN9" | "BACK" | "BACK_BUTTON" | "BUTTON4" => {
+            Some(EnigoButton::Back)
+        }
+        "UNKNOWN4" | "UNKNOWN6" | "UNKNOWN8" | "FORWARD" | "FORWARD_BUTTON" | "BUTTON5" => {
+            Some(EnigoButton::Forward)
+        }
         "SCROLL_UP" | "SCROLLUP" | "WHEEL_UP" => Some(EnigoButton::ScrollUp),
         "SCROLL_DOWN" | "SCROLLDOWN" | "WHEEL_DOWN" => Some(EnigoButton::ScrollDown),
         "SCROLL_LEFT" | "SCROLLLEFT" | "WHEEL_LEFT" => Some(EnigoButton::ScrollLeft),
@@ -824,7 +828,17 @@ fn start_click_thread(config: ClickConfig) -> Option<Arc<AtomicBool>> {
     let trigger = parse_key(&config.input);
 
     let input_lower = config.input.to_lowercase();
-    if trigger.is_none() && input_lower != "unknown4" && input_lower != "unknown5" && input_lower != "unknown6" && input_lower != "unknown7" && input_lower != "unknown8" && input_lower != "unknown9" && input_lower != "left_mouse" && input_lower != "right_mouse" && input_lower != "middle_mouse" {
+    if trigger.is_none()
+        && input_lower != "unknown4"
+        && input_lower != "unknown5"
+        && input_lower != "unknown6"
+        && input_lower != "unknown7"
+        && input_lower != "unknown8"
+        && input_lower != "unknown9"
+        && input_lower != "left_mouse"
+        && input_lower != "right_mouse"
+        && input_lower != "middle_mouse"
+    {
         eprintln!(
             "Warning: Unsupported keyboard input key '{}'; defaulting listener fallback to F6",
             config.input
@@ -853,6 +867,7 @@ fn start_click_thread(config: ClickConfig) -> Option<Arc<AtomicBool>> {
     thread::spawn(move || {
         let mut enigo = Enigo::new(&Settings::default()).expect("failed to create Enigo instance");
 
+        #[cfg(target_os = "linux")]
         enigo.set_delay(0);
 
         let calibration_iterations = 20;
