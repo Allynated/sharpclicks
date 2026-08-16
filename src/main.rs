@@ -559,6 +559,14 @@ impl eframe::App for SharpClicks {
 }
 
 fn main() -> eframe::Result<()> {
+    #[cfg(target_os = "linux")]
+    unsafe {
+        unsafe extern "C" {
+            fn XInitThreads() -> i32;
+        }
+        XInitThreads();
+    }
+
     let native_options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("SharpClicks")
@@ -786,7 +794,7 @@ fn parse_key(value: &str) -> Option<Key> {
         "KP_MINUS" | "KPMINUS" => Some(Key::KpMinus),
         "KP_MULTIPLY" | "KPMULTIPLY" => Some(Key::KpMultiply),
         "KP_DIVIDE" | "KPDIVIDE" => Some(Key::KpDivide),
-        "KP_DELETE" | "KPDELETE" => Some(Key::KpDelete),
+        "KP_DELETE" | "KPDELETE" => Some(Key::Delete),
         "PRINTSCREEN" | "PRINT" => Some(Key::PrintScreen),
         "PAUSE" => Some(Key::Pause),
         "BACKQUOTE" | "BACKTICK" | "`" => Some(Key::BackQuote),
