@@ -9,4 +9,9 @@ if ! command -v cargo &> /dev/null; then
     exit 1
 fi
 
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    cargo build --release
+    codesign --force --deep --sign - target/release/sharpclicks
+fi
+
 cargo run --release
