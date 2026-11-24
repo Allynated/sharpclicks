@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=SharpClicks
+GenericName=Autoclicker
+Comment=CPS-based autoclicker
+Exec=sharpclicks
+Icon=sharpclicks
+Terminal=false
+Categories=Utility;
+Keywords=autoclicker;clicker;cps;
+StartupWMClass=sharpclicks
