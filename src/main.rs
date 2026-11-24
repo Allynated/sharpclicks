@@ -4,6 +4,8 @@
 // =============================================================================
 // ^^This was a lifesaver, thank you so much lol
 
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use eframe::egui::{self};
 use enigo::{Button as EnigoButton, Direction, Enigo, Mouse, Settings};
 use rdev::{EventType, Key};
@@ -203,6 +205,24 @@ fn button_to_string(button: rdev::Button) -> Option<String> {
 }
 
 fn generated_ui(ctx: &egui::Context, state: &mut GeneratedState) {
+
+    if state.binding_input {
+        ctx.input(|i| {
+            for event in &i.events {
+                if let egui::Event::Key {
+                    key,
+                    pressed: true,
+                    ..
+                } = event
+                {
+                    state.input = format!("{:?}", key);
+                    state.binding_input = false;
+                    break;
+                }
+            }
+        });
+    }
+
     if let Some(rx) = &state.binding_input_rx {
         if let Ok(key_name) = rx.try_recv() {
             state.input = key_name;
@@ -701,14 +721,6 @@ fn click_timing_from_cps_cdc(cps: f32, cdc: f32, overhead_us: u64) -> ClickTimin
     let hold_us = hold_us.saturating_sub(overhead_us).max(500);
     let release_us = release_us.saturating_sub(overhead_us).max(500);
 
-    let speed_compensation_modifier = if cps > 50.0 { 1.000 } else { 1.000 };
-
-    let hold_us = (hold_us as f64 / speed_compensation_modifier) as u64;
-    let release_us = (release_us as f64 / speed_compensation_modifier) as u64;
-
-    let hold_us = hold_us.saturating_sub(overhead_us).max(250);
-    let release_us = release_us.saturating_sub(overhead_us).max(250);
-
     ClickTiming {
         hold_us,
         release_us,
@@ -721,12 +733,21 @@ fn hook_lock() -> MutexGuard<'static, HookState> {
 
 fn ensure_hook_started() {
     static START: Once = Once::new();
+
     START.call_once(|| {
-        thread::spawn(|| {
-            if let Err(err) = rdev::listen(handle_hook_event) {
-                eprintln!("CRITICAL ERROR: Failed to attach global system hook: {err:?}");
+        let (tx, rx) = mpsc::channel();
+
+        thread::spawn(move || {
+            tx.send(()).ok(); // signal thread started
+
+            if let Err(err) = rdev::listen(|event| {
+                handle_hook_event(event);
+            }) {
+                eprintln!("{err:?}");
             }
         });
+
+        let _ = rx.recv();
     });
 }
 
