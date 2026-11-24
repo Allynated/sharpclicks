@@ -117,4 +117,6 @@ Built with [eframe/egui](https://github.com/emilk/egui), [enigo](https://github.
 
 ## License
 
-Add a license here (for example MIT or Apache-2.0) and include a `LICENSE` file in the repository.
+MIT License
+
+Copyright (c) 2026 Allyn
