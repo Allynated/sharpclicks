@@ -18,7 +18,7 @@ Started it as a hobby project to learn rust. Currently most of the application I
 | OS | Status | Notes |
 |---|---|---|
 | Linux | Supported | **X11 session required.** Global input capture generally does not work under Wayland. |
-| Windows | Not Supported Yet| |
+| Windows | Supported | |
 | macOS | Not Supported Yet| ~~Grant the app **Accessibility** (and, if prompted, **Input Monitoring**) permission in System Settings → Privacy & Security.~~ |
 
 ### Linux and Wayland
