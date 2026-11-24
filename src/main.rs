@@ -10,12 +10,12 @@ use rdev::{EventType, Key};
 use serde::{Deserialize, Serialize};
 use spin_sleep;
 use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
+    Arc, OnceLock, atomic::{AtomicBool, Ordering},
 };
 use std::thread;
 use std::time::Duration;
-
+use directories::ProjectDirs;
+use std::{fs, path::PathBuf};
 use std::sync::mpsc::{self, Receiver};
 
 struct GeneratedState {
@@ -581,10 +581,20 @@ fn main() -> eframe::Result<()> {
     )
 }
 
-fn load_profile_files() -> Vec<String> {
-    let _ = std::fs::create_dir_all("profiles");
+fn profiles_dir() -> &'static std::path::Path {
+    static DIR: OnceLock<PathBuf> = OnceLock::new();
+    DIR.get_or_init(|| {
+        ProjectDirs::from("", "", "SharpClicks")
+            .map(|d| d.data_dir().join("profiles"))
+            .unwrap_or_else(|| PathBuf::from("profiles"))
+    })
+}
 
-    let mut profiles = match std::fs::read_dir("profiles") {
+fn load_profile_files() -> Vec<String> {
+    let dir = profiles_dir();
+    let _ = std::fs::create_dir_all(&dir);
+
+    let mut profiles = match std::fs::read_dir(&dir) {
         Ok(entries) => entries
             .filter_map(Result::ok)
             .filter_map(|entry| {
@@ -603,14 +613,29 @@ fn load_profile_files() -> Vec<String> {
     profiles
 }
 
-fn load_profile(state: &mut GeneratedState, profile_name: &str) -> Result<(), String> {
-    let clean_name = profile_name.trim();
-    if clean_name.is_empty() {
+fn validate_profile_name(name: &str) -> Result<&str, String> {
+    let name = name.trim();
+
+    if name.is_empty() {
         return Err("Profile name cannot be empty".to_string());
     }
+    if name == "." || name == ".." || name.ends_with('.') {
+        return Err("Profile name is not valid".to_string());
+    }
+    if name
+        .chars()
+        .any(|c| c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'))
+    {
+        return Err("Profile name contains characters that aren't allowed".to_string());
+    }
 
-    let profile_dir = std::path::Path::new("profiles");
-    let file_path = profile_dir.join(format!("{clean_name}.json"));
+    Ok(name)
+}
+
+fn load_profile(state: &mut GeneratedState, profile_name: &str) -> Result<(), String> {
+    let clean_name = validate_profile_name(profile_name)?;
+
+    let file_path = profiles_dir().join(format!("{clean_name}.json"));
     let json = std::fs::read_to_string(&file_path)
         .map_err(|err| format!("Failed to read profile '{}': {err}", file_path.display()))?;
 
@@ -628,13 +653,9 @@ fn load_profile(state: &mut GeneratedState, profile_name: &str) -> Result<(), St
 }
 
 fn save_profile(state: &GeneratedState) -> Result<(), String> {
-    let profile_name = state.save_name.trim();
+    let profile_name = validate_profile_name(&state.save_name)?;
 
-    if profile_name.is_empty() {
-        return Err("Profile name cannot be empty".to_string());
-    }
-
-    let profile_dir = std::path::Path::new("profiles");
+    let profile_dir = profiles_dir();
     std::fs::create_dir_all(profile_dir)
         .map_err(|err| format!("Failed to create profiles directory: {err}"))?;
 
@@ -650,24 +671,20 @@ fn save_profile(state: &GeneratedState) -> Result<(), String> {
         .map_err(|err| format!("Failed to serialize profile: {err}"))?;
 
     let file_path = profile_dir.join(format!("{profile_name}.json"));
-    std::fs::write(&file_path, json).map_err(|err| {
-        format!(
-            "Failed to write profile file '{}': {err}",
-            file_path.display()
-        )
-    })?;
+    let tmp_path = profile_dir.join(format!("{profile_name}.json.tmp"));
+
+    std::fs::write(&tmp_path, json)
+        .map_err(|err| format!("Failed to write profile file '{}': {err}", tmp_path.display()))?;
+    std::fs::rename(&tmp_path, &file_path)
+        .map_err(|err| format!("Failed to save profile file '{}': {err}", file_path.display()))?;
 
     Ok(())
 }
 
 fn delete_profile(profile_name: &str) -> Result<(), String> {
-    let clean_name = profile_name.trim();
-    if clean_name.is_empty() {
-        return Err("Profile name cannot be empty".to_string());
-    }
+    let clean_name = validate_profile_name(profile_name)?;
 
-    let profile_dir = std::path::Path::new("profiles");
-    let file_path = profile_dir.join(format!("{clean_name}.json"));
+    let file_path = profiles_dir().join(format!("{clean_name}.json"));
 
     if !file_path.exists() {
         return Err(format!("Profile '{}' does not exist", clean_name));
@@ -684,16 +701,16 @@ fn click_timing_from_cps_cdc(cps: f32, cdc: f32, overhead_us: u64) -> ClickTimin
     let cdc = cdc.clamp(0.0, 100.0);
 
     let period_us = 1_000_000.0 / cps as f64;
-    let hold_us = (period_us * (cdc as f64 / 100.0)).round() as u64;
-    let release_us = period_us.round() as u64 - hold_us;
+    let hold_us = (period_us * (cdc as f64 / 100.0)) as u64;
+    let release_us = period_us as u64 - hold_us;
 
     let hold_us = hold_us.saturating_sub(overhead_us).max(500);
     let release_us = release_us.saturating_sub(overhead_us).max(500);
 
-    let speed_compensation_modifier = if cps > 50.0 { 1.015 } else { 1.000 };
+    let speed_compensation_modifier = if cps > 50.0 { 1.000 } else { 1.000 };
 
-    let hold_us = (hold_us as f64 / speed_compensation_modifier).round() as u64;
-    let release_us = (release_us as f64 / speed_compensation_modifier).round() as u64;
+    let hold_us = (hold_us as f64 / speed_compensation_modifier) as u64;
+    let release_us = (release_us as f64 / speed_compensation_modifier) as u64;
 
     let hold_us = hold_us.saturating_sub(overhead_us).max(250);
     let release_us = release_us.saturating_sub(overhead_us).max(250);
@@ -866,9 +883,11 @@ fn start_click_thread(config: ClickConfig) -> Option<Arc<AtomicBool>> {
     let global_running = Arc::new(AtomicBool::new(true));
 
     let click_enabled = Arc::new(AtomicBool::new(false));
+    let trigger_held = Arc::new(AtomicBool::new(false));
 
     let click_enabled_loop = Arc::clone(&click_enabled);
     let click_enabled_listener = Arc::clone(&click_enabled);
+    let trigger_held_listener = Arc::clone(&trigger_held);
     let global_running_loop = Arc::clone(&global_running);
     let global_running_listener = Arc::clone(&global_running);
 
@@ -967,13 +986,17 @@ fn start_click_thread(config: ClickConfig) -> Option<Arc<AtomicBool>> {
             };
 
             if is_trigger_active {
-                if config.click_mode == 1 {
-                    let next = !click_enabled_listener.load(Ordering::SeqCst);
-                    click_enabled_listener.store(next, Ordering::SeqCst);
-                } else {
-                    click_enabled_listener.store(true, Ordering::SeqCst);
+                if !trigger_held_listener.load(Ordering::SeqCst) {
+                    trigger_held_listener.store(true, Ordering::SeqCst);
+                    if config.click_mode == 1 {
+                        let next = !click_enabled_listener.load(Ordering::SeqCst);
+                        click_enabled_listener.store(next, Ordering::SeqCst);
+                    } else {
+                        click_enabled_listener.store(true, Ordering::SeqCst);
+                    }
                 }
             } else if is_trigger_released {
+                trigger_held_listener.store(false, Ordering::SeqCst);
                 if config.click_mode == 0 {
                     click_enabled_listener.store(false, Ordering::SeqCst);
                 }
