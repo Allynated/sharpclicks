@@ -18,6 +18,27 @@ use directories::ProjectDirs;
 use std::{fs, path::PathBuf};
 use std::sync::mpsc::{self, Receiver};
 
+use std::sync::{Mutex, MutexGuard, Once};
+
+struct ActiveTrigger {
+    key: Option<Key>,
+    input: String,
+    click_mode: usize,
+    click_enabled: Arc<AtomicBool>,
+    trigger_held: Arc<AtomicBool>,
+    running: Arc<AtomicBool>,
+}
+
+struct HookState {
+    binding_tx: Option<mpsc::Sender<String>>,
+    trigger: Option<ActiveTrigger>,
+}
+
+static HOOK: Mutex<HookState> = Mutex::new(HookState {
+    binding_tx: None,
+    trigger: None,
+});
+
 struct GeneratedState {
     enable_top: bool,
     enable_bottom: bool,
@@ -85,36 +106,8 @@ impl Default for GeneratedState {
 }
 
 fn start_key_binding_listener(tx: std::sync::mpsc::Sender<String>) {
-    thread::spawn(move || {
-        let captured = Arc::new(AtomicBool::new(false));
-        let captured_clone = Arc::clone(&captured);
-
-        if let Err(err) = rdev::listen(move |event: rdev::Event| {
-            if !captured_clone.load(Ordering::SeqCst) {
-                match event.event_type {
-                    EventType::KeyPress(key) => {
-                        if let Some(key_name) = key_to_string(key) {
-                            let _ = tx.send(key_name);
-                            captured_clone.store(true, Ordering::SeqCst);
-                        }
-                    }
-                    EventType::ButtonPress(button) => {
-                        if let rdev::Button::Left = button {
-                            return;
-                        }
-
-                        if let Some(button_name) = button_to_string(button) {
-                            let _ = tx.send(button_name);
-                            captured_clone.store(true, Ordering::SeqCst);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }) {
-            eprintln!("Failed to listen for binding events: {err:?}");
-        }
-    });
+    ensure_hook_started();
+    hook_lock().binding_tx = Some(tx);
 }
 
 fn key_to_string(key: Key) -> Option<String> {
@@ -461,6 +454,7 @@ fn generated_ui(ctx: &egui::Context, state: &mut GeneratedState) {
                             state.binding_input_rx = None;
                             state.binding_output = false;
                             state.binding_output_rx = None;
+                            cancel_binding();
                             if let Some(active) = start_click_thread(config) {
                                 state.is_running = true;
                                 state.click_active = Some(active);
@@ -721,6 +715,91 @@ fn click_timing_from_cps_cdc(cps: f32, cdc: f32, overhead_us: u64) -> ClickTimin
     }
 }
 
+fn hook_lock() -> MutexGuard<'static, HookState> {
+    HOOK.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+fn ensure_hook_started() {
+    static START: Once = Once::new();
+    START.call_once(|| {
+        thread::spawn(|| {
+            if let Err(err) = rdev::listen(handle_hook_event) {
+                eprintln!("CRITICAL ERROR: Failed to attach global system hook: {err:?}");
+            }
+        });
+    });
+}
+
+fn button_matches(input: &str, button: rdev::Button) -> bool {
+    let input = input.trim().to_ascii_uppercase();
+    match button {
+        rdev::Button::Left => input == "LEFT_MOUSE",
+        rdev::Button::Right => input == "RIGHT_MOUSE",
+        rdev::Button::Middle => input == "MIDDLE_MOUSE",
+        rdev::Button::Unknown(n @ 4..=9) => input == format!("UNKNOWN{n}"),
+        _ => false,
+    }
+}
+
+fn handle_hook_event(event: rdev::Event) {
+    if matches!(event.event_type, EventType::MouseMove { .. }) {
+        return;
+    }
+
+    let mut hook = hook_lock();
+
+    // A pending key binding takes priority over the clicker
+    if hook.binding_tx.is_some() {
+        let captured = match event.event_type {
+            EventType::KeyPress(key) => key_to_string(key),
+            EventType::ButtonPress(rdev::Button::Left) => None,
+            EventType::ButtonPress(button) => button_to_string(button),
+            _ => None,
+        };
+        if let Some(name) = captured {
+            if let Some(tx) = hook.binding_tx.take() {
+                let _ = tx.send(name);
+            }
+        }
+        return;
+    }
+
+    let Some(trigger) = hook.trigger.as_ref() else {
+        return;
+    };
+    if !trigger.running.load(Ordering::SeqCst) {
+        return;
+    }
+
+    let (pressed, released) = match event.event_type {
+        EventType::KeyPress(k) => (trigger.key == Some(k), false),
+        EventType::KeyRelease(k) => (false, trigger.key == Some(k)),
+        EventType::ButtonPress(b) => (button_matches(&trigger.input, b), false),
+        EventType::ButtonRelease(b) => (false, button_matches(&trigger.input, b)),
+        _ => return,
+    };
+
+    if pressed {
+        if !trigger.trigger_held.swap(true, Ordering::SeqCst) {
+            if trigger.click_mode == 1 {
+                let next = !trigger.click_enabled.load(Ordering::SeqCst);
+                trigger.click_enabled.store(next, Ordering::SeqCst);
+            } else {
+                trigger.click_enabled.store(true, Ordering::SeqCst);
+            }
+        }
+    } else if released {
+        trigger.trigger_held.store(false, Ordering::SeqCst);
+        if trigger.click_mode == 0 {
+            trigger.click_enabled.store(false, Ordering::SeqCst);
+        }
+    }
+}
+
+fn cancel_binding() {
+    hook_lock().binding_tx = None;
+}
+
 fn parse_key(value: &str) -> Option<Key> {
     match value.trim().to_ascii_uppercase().as_str() {
         "F1" => Some(Key::F1),
@@ -881,15 +960,9 @@ fn start_click_thread(config: ClickConfig) -> Option<Arc<AtomicBool>> {
         }
     };
     let global_running = Arc::new(AtomicBool::new(true));
-
     let click_enabled = Arc::new(AtomicBool::new(false));
-    let trigger_held = Arc::new(AtomicBool::new(false));
-
     let click_enabled_loop = Arc::clone(&click_enabled);
-    let click_enabled_listener = Arc::clone(&click_enabled);
-    let trigger_held_listener = Arc::clone(&trigger_held);
     let global_running_loop = Arc::clone(&global_running);
-    let global_running_listener = Arc::clone(&global_running);
 
     thread::spawn(move || {
         let mut enigo = Enigo::new(&Settings::default()).expect("failed to create Enigo instance");
@@ -929,81 +1002,18 @@ fn start_click_thread(config: ClickConfig) -> Option<Arc<AtomicBool>> {
                 spin_sleeper.sleep(Duration::from_millis(10));
             }
         }
+
+        let _ = enigo.button(output_button, Direction::Release);
     });
 
-    thread::spawn(move || {
-        use std::io::Write;
-
-        println!("SharpClicks: Initializing global OS event hook...");
-        let _ = std::io::stdout().flush();
-
-        if let Err(err) = rdev::listen(move |event: rdev::Event| {
-            if !global_running_listener.load(Ordering::SeqCst) {
-                return;
-            }
-
-            if let EventType::MouseMove { .. } = event.event_type {
-                return;
-            }
-
-            let is_trigger_active = match &event.event_type {
-                EventType::KeyPress(key) => parse_key(&config.input).map_or(false, |k| k == *key),
-                EventType::ButtonPress(button) => {
-                    println!("SharpClicks Debug -> Pressed: {:?}", button);
-                    let _ = std::io::stdout().flush();
-
-                    match button {
-                        rdev::Button::Unknown(4) => config.input.to_lowercase() == "unknown4",
-                        rdev::Button::Unknown(5) => config.input.to_lowercase() == "unknown5",
-                        rdev::Button::Unknown(6) => config.input.to_lowercase() == "unknown6",
-                        rdev::Button::Unknown(7) => config.input.to_lowercase() == "unknown7",
-                        rdev::Button::Unknown(8) => config.input.to_lowercase() == "unknown8",
-                        rdev::Button::Unknown(9) => config.input.to_lowercase() == "unknown9",
-                        rdev::Button::Left => config.input.to_ascii_uppercase() == "LEFT_MOUSE",
-                        rdev::Button::Right => config.input.to_ascii_uppercase() == "RIGHT_MOUSE",
-                        rdev::Button::Middle => config.input.to_ascii_uppercase() == "MIDDLE_MOUSE",
-                        _ => false,
-                    }
-                }
-                _ => false,
-            };
-
-            let is_trigger_released = match &event.event_type {
-                EventType::KeyRelease(key) => parse_key(&config.input).map_or(false, |k| k == *key),
-                EventType::ButtonRelease(button) => match button {
-                    rdev::Button::Unknown(4) => config.input.to_lowercase() == "unknown4",
-                    rdev::Button::Unknown(5) => config.input.to_lowercase() == "unknown5",
-                    rdev::Button::Unknown(6) => config.input.to_lowercase() == "unknown6",
-                    rdev::Button::Unknown(7) => config.input.to_lowercase() == "unknown7",
-                    rdev::Button::Unknown(8) => config.input.to_lowercase() == "unknown8",
-                    rdev::Button::Unknown(9) => config.input.to_lowercase() == "unknown9",
-                    rdev::Button::Left => config.input.to_ascii_uppercase() == "LEFT_MOUSE",
-                    rdev::Button::Right => config.input.to_ascii_uppercase() == "RIGHT_MOUSE",
-                    rdev::Button::Middle => config.input.to_ascii_uppercase() == "MIDDLE_MOUSE",
-                    _ => false,
-                },
-                _ => false,
-            };
-
-            if is_trigger_active {
-                if !trigger_held_listener.load(Ordering::SeqCst) {
-                    trigger_held_listener.store(true, Ordering::SeqCst);
-                    if config.click_mode == 1 {
-                        let next = !click_enabled_listener.load(Ordering::SeqCst);
-                        click_enabled_listener.store(next, Ordering::SeqCst);
-                    } else {
-                        click_enabled_listener.store(true, Ordering::SeqCst);
-                    }
-                }
-            } else if is_trigger_released {
-                trigger_held_listener.store(false, Ordering::SeqCst);
-                if config.click_mode == 0 {
-                    click_enabled_listener.store(false, Ordering::SeqCst);
-                }
-            }
-        }) {
-            eprintln!("CRITICAL ERROR: Failed to attach global system hook: {err:?}");
-        }
+    ensure_hook_started();
+    hook_lock().trigger = Some(ActiveTrigger {
+        key: trigger,
+        input: config.input.clone(),
+        click_mode: config.click_mode,
+        click_enabled: Arc::clone(&click_enabled),
+        trigger_held: Arc::new(AtomicBool::new(false)),
+        running: Arc::clone(&global_running),
     });
 
     Some(global_running)
