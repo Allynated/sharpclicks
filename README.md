@@ -1,6 +1,7 @@
 # SharpClicks
 
 A CPS-based autoclicker written in Rust, built for accurate click timing.
+Started it as a hobby project to learn rust. Currently most of the application IS vibe-coded, but I am still learning regardless!
 
 > **Status:** in testing. Please [report any bugs](https://github.com/Allynated/sharpclicks/issues)!
 
